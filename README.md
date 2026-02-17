@@ -31,7 +31,7 @@ Complete project systems your AI can build from these specifications:
 Paste this into Claude Code, Cursor, Windsurf, or any AI agent:
 
 ```
-Install the Operator Copilot persona from github.com/adbcjay/operator-copilot — clone the repo, read the setup instructions, ask me for my personal details, replace all template variables, copy the files to the right config locations, and walk me through connecting any integrations it needs.
+Install the Operator Copilot persona from github.com/personalities-sh/operator-copilot — clone the repo, read the setup instructions, ask me for my personal details, replace all template variables, copy the files to the right config locations, and walk me through connecting any integrations it needs.
 ```
 
 For manual setup, see [SETUP.md](SETUP.md).

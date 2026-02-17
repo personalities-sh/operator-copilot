@@ -10,7 +10,7 @@
 The fastest way to install: paste this into your AI agent:
 
 ```
-Install the Operator Copilot persona from github.com/adbcjay/operator-copilot — clone the repo, read the setup instructions, ask me for my personal details, replace all template variables, copy the files to the right config locations, and walk me through connecting any integrations it needs.
+Install the Operator Copilot persona from github.com/personalities-sh/operator-copilot — clone the repo, read the setup instructions, ask me for my personal details, replace all template variables, copy the files to the right config locations, and walk me through connecting any integrations it needs.
 ```
 
 Your AI will handle the rest. It will:
@@ -27,7 +27,7 @@ If you prefer to set things up yourself:
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/adbcjay/operator-copilot.git
+git clone https://github.com/personalities-sh/operator-copilot.git
 cd operator-copilot
 ```
 
