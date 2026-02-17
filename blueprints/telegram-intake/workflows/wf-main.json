@@ -1,0 +1,649 @@
+{
+  "name": "WF-Main: Document Intake Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "tg-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "YOUR_WEBHOOK_ID",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Whitelist check + context extraction for all incoming Telegram messages\n// Determines: file upload vs text message vs ignore\n// Computes: isAdmin, canAccessBoard, isGroup\n// Group behavior: only respond to @mentions, replies to bot, or file uploads\n\nconst BOT_USERNAME = 'YOUR_BOT_USERNAME';\nconst BOT_ID = 0; // Replace with your bot's numeric ID\n\nconst ADMINS = []; // Replace with admin Telegram user IDs\nconst TEAM = []; // Replace with team member Telegram user IDs\nconst ALLOWED_GROUPS = []; // Replace with allowed group chat IDs\nconst ALL_USERS = [...ADMINS, ...TEAM];\n\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  // Early exit for non-message updates (my_chat_member, chat_member, etc.)\n  if (!item.json.message) {\n    results.push({ json: { ...item.json, action: 'ignore', reason: 'non_message_update' } });\n    continue;\n  }\n\n  const msg = item.json.message;\n  const chatId = msg.chat?.id;\n  const userId = msg.from?.id;\n  const chatType = msg.chat?.type;\n  const isGroup = chatType === 'group' || chatType === 'supergroup';\n  const isAdmin = ADMINS.includes(userId);\n  const isAllowed = ALL_USERS.includes(userId);\n  const isAllowedGroup = ALLOWED_GROUPS.includes(chatId);\n\n  // File detection\n  const hasDocument = !!msg.document;\n  const hasPhoto = !!msg.photo;\n  const hasFile = hasDocument || hasPhoto;\n  const text = msg.text || msg.caption || '';\n\n  // Extract file metadata\n  let fileName = 'unknown';\n  let mimeType = 'application/octet-stream';\n  if (hasDocument) {\n    fileName = msg.document.file_name || 'document';\n    mimeType = msg.document.mime_type || 'application/pdf';\n  } else if (hasPhoto) {\n    fileName = 'photo.jpg';\n    mimeType = 'image/jpeg';\n  }\n\n  // Extract file_id for download\n  let fileId = '';\n  if (hasDocument) {\n    fileId = msg.document.file_id;\n  } else if (hasPhoto) {\n    fileId = msg.photo[msg.photo.length - 1].file_id;\n  }\n\n  const userName = msg.from?.first_name || 'User';\n\n  // Whitelist: reject unknown groups\n  if (isGroup && !isAllowedGroup) {\n    results.push({ json: { ...item.json, action: 'ignore', reason: 'unknown_group' } });\n    continue;\n  }\n  // Whitelist: reject unknown users (DM or in-group)\n  if (!isAllowed) {\n    results.push({ json: { ...item.json, action: 'ignore', reason: 'unknown_user' } });\n    continue;\n  }\n\n  // Group chat filter: only respond to @mentions, replies to bot, or file uploads\n  if (isGroup && !hasFile) {\n    const isMentioned = (msg.entities || []).some(e =>\n      e.type === 'mention' &&\n      text.substring(e.offset, e.offset + e.length).toLowerCase() === '@' + BOT_USERNAME\n    );\n    const isReplyToBot = msg.reply_to_message?.from?.id === BOT_ID;\n\n    if (!isMentioned && !isReplyToBot) {\n      results.push({ json: { ...item.json, action: 'ignore', reason: 'group_not_invoked' } });\n      continue;\n    }\n\n    // Strip the @mention from the text so the agent gets a clean prompt\n    let cleanText = text;\n    if (isMentioned) {\n      cleanText = text.replace(new RegExp('@' + BOT_USERNAME, 'gi'), '').trim();\n    }\n\n    results.push({\n      json: {\n        ...item.json,\n        chatId, userId, chatType, isGroup, isAdmin,\n        isAllowed: true,\n        canAccessBoard: isAdmin && !isGroup,\n        hasFile, text: cleanText, fileName, mimeType, fileId, userName,\n        action: cleanText ? 'text_message' : 'ignore'\n      }\n    });\n    continue;\n  }\n\n  // DMs and file uploads: process normally\n  let action;\n  if (hasFile) {\n    action = 'file_received';\n  } else if (text) {\n    action = 'text_message';\n  } else {\n    action = 'ignore';\n  }\n\n  results.push({\n    json: {\n      ...item.json,\n      chatId, userId, chatType, isGroup, isAdmin,\n      isAllowed: true,\n      canAccessBoard: isAdmin && !isGroup,\n      hasFile, text, fileName, mimeType, fileId, userName,\n      action\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "gate",
+      "name": "Gate & Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=Got it, classifying {{ $json.fileName }}...",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "tg-ack",
+      "name": "TG: File Received Ack",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        672,
+        -208
+      ],
+      "webhookId": "YOUR_WEBHOOK_ID",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.telegram.org/botYOUR_TELEGRAM_BOT_TOKEN/getFile?file_id={{ $json.fileId }}",
+        "options": {}
+      },
+      "id": "tg-download",
+      "name": "Download TG File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "name": "={{ $('Gate & Context').first().json.fileName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SHARED_DRIVE_ID"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_INBOX_FOLDER_ID"
+        },
+        "options": {}
+      },
+      "id": "upload-inbox",
+      "name": "Upload to Drive Inbox",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        880,
+        -64
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_GOOGLE_DRIVE_CREDENTIAL_ID",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the agent input prompt for a file upload\n// The file is already staged in Drive Inbox â€” agent needs to classify it\nconst uploadResult = $input.first().json;\nconst gate = $('Gate & Context').first().json;\n\nlet chatInput = `User ${gate.userName} sent a file: \"${gate.fileName}\" (${gate.mimeType}).`;\nchatInput += `\\nThe file has been staged in Drive Inbox with file ID: ${uploadResult.id}.`;\nif (gate.text) {\n  chatInput += `\\nUser caption: \"${gate.text}\"`;\n}\nchatInput += '\\nClassify this file using the preview_classification tool.';\n\nreturn [{\n  json: {\n    chatInput,\n    sessionId: String(gate.chatId),\n    chatId: gate.chatId,\n    userId: gate.userId,\n    isAdmin: gate.isAdmin,\n    isGroup: gate.isGroup,\n    canAccessBoard: gate.canAccessBoard,\n    driveFileId: uploadResult.id,\n    fileName: gate.fileName,\n    mimeType: gate.mimeType\n  }\n}];"
+      },
+      "id": "build-file-input",
+      "name": "Build File Agent Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build agent input for a text message (no file)\nconst gate = $input.first().json;\n\nreturn [{\n  json: {\n    chatInput: gate.text,\n    sessionId: String(gate.chatId),\n    chatId: gate.chatId,\n    userId: gate.userId,\n    isAdmin: gate.isAdmin,\n    isGroup: gate.isGroup,\n    canAccessBoard: gate.canAccessBoard\n  }\n}];"
+      },
+      "id": "build-text-input",
+      "name": "Build Text Agent Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        736,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.chatInput }}",
+        "options": {
+          "systemMessage": "You are a document intake bot for {{YOUR_COMPANY}}.\n\nYOUR JOB: Make document management effortless. The team sends you files, you classify and file them. They ask questions, you answer from organizational data. You are the memory and filing system they never have to think about.\n\nCAPABILITIES:\n- preview_classification: Classify an uploaded file (already staged in Drive Inbox). Call this whenever a user sends you a file.\n- execute_classification: Execute a confirmed classification. Call after user confirms a preview.\n- search_drive: Find documents by company, type, date. Use when someone asks for a file.\n- sort_inbox: Classify everything in the Drive Inbox. Use when asked to sort/process inbox.\n- query_pending: Check pending entries, recent classifications, status. Use for \"what's pending?\" type questions.\n- inbox_status: Quick count of files in inbox.\n\nCRITICAL RULES - TOOL USE:\n- You MUST call execute_classification when the user confirms a classification. NEVER skip the tool call.\n- You are FORBIDDEN from generating text like \"Done\", \"Filed\", \"Logged\", \"Moved\", or any completion message without FIRST making an actual execute_classification tool call in this turn.\n- If you find yourself about to say a file has been filed, moved, renamed, or logged: STOP. Check if you actually called execute_classification in THIS turn. If not, you MUST call it now.\n- Do NOT rely on memory of past executions. Each confirmation requires its own fresh tool call.\n- Even if a file looks identical to one you processed before, you MUST still call execute_classification. Every confirmation = a tool call. No exceptions.\n\nBEHAVIOR:\n- When you receive a file: classify it using preview_classification, then ALWAYS present what you will do before acting:\n  \"Here's what I'll do:\n  Name: [proposed filename]\n  Type: [classification]\n  Destination: [folder name]\n  Sheet entry: Pending, [amount], [date]\n  Confidence: [high/medium/low]\n  Confirm? (Yes / Edit)\"\n- NEVER rename, move, or log a file without user confirmation first.\n- If user says \"yes\" or \"confirm\" or similar affirmative: you MUST call execute_classification with the confirmed details. Do NOT respond without making the tool call.\n- If user says \"edit\" or provides corrections: adjust and re-preview.\n- If confidence is \"low\": flag it explicitly with a warning.\n- Be concise. No filler. No emojis. Direct and professional.\n- If you don't know something, say so. Don't guess.\n\nACCESS CONTROL:\n- canAccessBoard flag tells you the user's access level.\n- If canAccessBoard=false: restricted files DO NOT EXIST for this user.\n- Group chats: NEVER show restricted content, even for admins.\n- Only admins in private DMs see restricted content.\n\nRESPONSE FORMAT:\n- File classification preview: structured block with Name, Type, Destination, Confidence\n- Search results: numbered list with filename, company, date, Drive link\n- Inbox sort: summary count + breakdown by category\n- Conversation: helpful, direct, professional",
+          "maxIterations": 10,
+          "returnIntermediateSteps": false
+        }
+      },
+      "id": "agent",
+      "name": "Intake Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        1328,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Gate & Context').first().json.chatId }}",
+        "text": "={{ $json.output }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "tg-reply",
+      "name": "TG: Send Response",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1552,
+        0
+      ],
+      "webhookId": "YOUR_WEBHOOK_ID",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "claude-sonnet-4-5-20250929",
+          "mode": "id"
+        },
+        "options": {
+          "maxTokensToSample": 2048,
+          "temperature": 0.3
+        }
+      },
+      "id": "llm",
+      "name": "Anthropic Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1104,
+        192
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "YOUR_ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "fromInput",
+        "tableName": "n8n_chat_histories",
+        "contextWindowLength": 6
+      },
+      "id": "memory",
+      "name": "Postgres Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        1232,
+        192
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "YOUR_POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "name": "preview_classification",
+        "description": "Classify a file that is already staged in Drive Inbox. Returns a PREVIEW with proposed filename, classification, destination folder, and confidence. Does NOT rename, move, or log the file. Call this first whenever a user sends a file.",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "iwZubQEOc6yPKgUv"
+        }
+      },
+      "id": "tool-preview",
+      "name": "Tool: preview_classification",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2,
+      "position": [
+        880,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "name": "execute_classification",
+        "description": "Execute a CONFIRMED classification. Renames the file, moves it to the destination folder, and logs it to the Pending Entries sheet. Only call this AFTER the user confirms a preview_classification result. Pass ALL fields from the confirmed preview.",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "xEON7jaJ1tE88YjK"
+        }
+      },
+      "id": "tool-execute",
+      "name": "Tool: execute_classification",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2,
+      "position": [
+        1056,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "name": "search_drive",
+        "description": "Search Google Drive for files by keyword, company name, or document type. Returns top 5 matching files with Drive links. Use when someone asks to find a file or document.",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "8MzxrUPUJcJm4mpa"
+        }
+      },
+      "id": "tool-search",
+      "name": "Tool: search_drive",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "name": "sort_inbox",
+        "description": "Preview-classify ALL files currently in the Drive Inbox. Returns a batch preview with proposed classifications for every file. Does NOT take action â€” just previews. Use when asked to sort or process the inbox.",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "oKd40Wse5Gy7J2lL"
+        }
+      },
+      "id": "tool-sort",
+      "name": "Tool: sort_inbox",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "name": "query_pending",
+        "description": "Query the Pending Entries tracking sheet. Returns counts, breakdowns by category, and recent entries. Use for questions like 'what is pending', 'recent classifications', 'how many expenses'.",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "VZ0d0HdCDIri1nAm"
+        }
+      },
+      "id": "tool-query",
+      "name": "Tool: query_pending",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2,
+      "position": [
+        1168,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "name": "inbox_status",
+        "description": "Quick check: how many files are in the Drive Inbox right now. No parameters needed. Use for quick status checks.",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "MQZDezqW2nH9KKpn"
+        }
+      },
+      "id": "tool-inbox-status",
+      "name": "Tool: inbox_status",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "file-check",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "file_received",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-file",
+      "name": "Is File?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "text-check",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "text_message",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-text",
+      "name": "Is Text?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        464,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.telegram.org/file/botYOUR_TELEGRAM_BOT_TOKEN/{{ $json.result.file_path }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "tg-download-binary",
+      "name": "TG Download Binary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1024,
+        -288
+      ]
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Gate & Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate & Context": {
+      "main": [
+        [
+          {
+            "node": "Is File?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download TG File": {
+      "main": [
+        [
+          {
+            "node": "TG Download Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Drive Inbox": {
+      "main": [
+        [
+          {
+            "node": "Build File Agent Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build File Agent Input": {
+      "main": [
+        [
+          {
+            "node": "Intake Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Text Agent Input": {
+      "main": [
+        [
+          {
+            "node": "Intake Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intake Agent": {
+      "main": [
+        [
+          {
+            "node": "TG: Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Intake Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Intake Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: preview_classification": {
+      "ai_tool": [
+        [
+          {
+            "node": "Intake Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: execute_classification": {
+      "ai_tool": [
+        [
+          {
+            "node": "Intake Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: search_drive": {
+      "ai_tool": [
+        [
+          {
+            "node": "Intake Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: sort_inbox": {
+      "ai_tool": [
+        [
+          {
+            "node": "Intake Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: query_pending": {
+      "ai_tool": [
+        [
+          {
+            "node": "Intake Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool: inbox_status": {
+      "ai_tool": [
+        [
+          {
+            "node": "Intake Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is File?": {
+      "main": [
+        [
+          {
+            "node": "TG: File Received Ack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Download TG File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Text?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Text?": {
+      "main": [
+        [
+          {
+            "node": "Build Text Agent Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "TG Download Binary": {
+      "main": [
+        [
+          {
+            "node": "Upload to Drive Inbox",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "dWWw867rZV23nLji"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

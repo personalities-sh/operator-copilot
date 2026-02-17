@@ -1,0 +1,38 @@
+name: task-management
+display_name: AI Task Management
+version: 1.0.0
+description: >
+  Telegram-triggered task management where the AI tracks, prioritizes,
+  and executes tasks across projects. Integrates with Google Sheets
+  for persistent tracking.
+
+complexity: medium
+setup_time_minutes: 30
+
+outcomes:
+  - Create, update, and query tasks via Telegram messages
+  - AI prioritizes tasks based on project goals and deadlines
+  - Persistent task tracking in Google Sheets with status and timestamps
+
+requires:
+  services:
+    - name: n8n
+      purpose: "Workflow orchestration — processes task commands"
+      required: true
+    - name: telegram
+      purpose: "Interface — send task commands via chat"
+      required: true
+    - name: google-sheets
+      purpose: "Storage — persistent task database"
+      required: true
+
+variables:
+  - key: TELEGRAM_BOT_TOKEN
+    prompt: "Telegram bot token (can reuse from telegram-intake)"
+    required: true
+  - key: TASK_SHEET_ID
+    prompt: "Google Sheet ID for task tracking"
+    required: true
+  - key: N8N_INSTANCE_URL
+    prompt: "Your n8n instance URL"
+    required: true

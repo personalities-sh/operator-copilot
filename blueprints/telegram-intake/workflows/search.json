@@ -1,0 +1,230 @@
+{
+  "name": "WF-Search: File Search",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "read-sheet",
+      "name": "Read Pending Entries",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_TRACKING_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pending Entries"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "search-filter",
+      "name": "Search & Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Search Pending Entries for files matching query, company, or docType\nconst items = $input.all();\nconst trigger = $('Parse Input').first().json;\nconst query = (trigger.query || '').toLowerCase();\nconst company = (trigger.company || '').toLowerCase();\nconst docType = (trigger.docType || '').toLowerCase();\nconst canAccessBoard = trigger.canAccessBoard === true || trigger.canAccessBoard === 'true';\n\n// Board-only classifications — invisible to non-admin users\nconst BOARD_CLASSIFICATIONS = [\n  'Entity Document', 'Work Contract', 'Personal/HR',\n  'Closed Agreement', 'Company Accounting'\n];\n\n// Score each row for relevance\nconst scored = [];\nfor (const item of items) {\n  const row = item.json;\n  if (!row['Classification']) continue;\n\n  // Board access gate\n  if (!canAccessBoard && BOARD_CLASSIFICATIONS.includes(row['Classification'])) continue;\n\n  let score = 0;\n  const filename = (row['New Filename'] || row['Original Filename'] || '').toLowerCase();\n  const rowCompany = (row['Company Name'] || '').toLowerCase();\n  const rowClass = (row['Classification'] || '').toLowerCase();\n  const rowSubtype = (row['Subtype'] || '').toLowerCase();\n  const rowNotes = (row['Notes'] || '').toLowerCase();\n\n  // Query matching (fuzzy: check if query words appear in key fields)\n  if (query) {\n    const words = query.split(/\\s+/);\n    for (const word of words) {\n      if (filename.includes(word)) score += 3;\n      if (rowCompany.includes(word)) score += 3;\n      if (rowClass.includes(word)) score += 2;\n      if (rowSubtype.includes(word)) score += 2;\n      if (rowNotes.includes(word)) score += 1;\n    }\n  }\n\n  // Company filter (exact-ish match)\n  if (company && rowCompany.includes(company)) score += 5;\n\n  // Document type filter\n  if (docType) {\n    if (rowClass.includes(docType)) score += 5;\n    if (rowSubtype.includes(docType)) score += 4;\n  }\n\n  // If no filters at all, include everything with base score\n  if (!query && !company && !docType) score = 1;\n\n  if (score > 0) {\n    scored.push({\n      score,\n      filename: row['New Filename'] || row['Original Filename'],\n      classification: row['Classification'],\n      company: row['Company Name'],\n      date: row['Date Extracted'],\n      amount: row['Amount'],\n      confidence: row['Confidence'],\n      driveLink: row['Drive Link'],\n      fileId: row['File ID']\n    });\n  }\n}\n\n// Sort by score descending, take top 5\nscored.sort((a, b) => b.score - a.score);\nconst results = scored.slice(0, 5);\n\nreturn [{\n  json: {\n    results,\n    totalFound: scored.length,\n    query: trigger.query,\n    company: trigger.company,\n    docType: trigger.docType,\n    needsDriveSearch: results.length === 0\n  }\n}];"
+      }
+    },
+    {
+      "id": "check-results",
+      "name": "Has Results?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "empty-check",
+              "leftValue": "={{ $json.needsDriveSearch }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "drive-search",
+      "name": "Search Drive API",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        880,
+        -120
+      ],
+      "parameters": {
+        "operation": "search",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SHARED_DRIVE_ID"
+        },
+        "returnAll": false,
+        "limit": 10,
+        "queryString": "={{ $('Workflow Input').first().json.query }}",
+        "options": {},
+        "driveId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SHARED_DRIVE_ID"
+        },
+        "resource": "fileFolder"
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_GOOGLE_DRIVE_CREDENTIAL_ID",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "id": "format-drive-results",
+      "name": "Format Drive Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "// Format Google Drive API search results as fallback\nconst items = $input.all();\nconst results = items\n  .filter(i => i.json.id && i.json.mimeType !== 'application/vnd.google-apps.folder')\n  .slice(0, 5)\n  .map(i => ({\n    filename: i.json.name,\n    classification: '(from Drive search)',\n    company: '',\n    date: i.json.modifiedTime ? i.json.modifiedTime.substring(0, 10) : '',\n    driveLink: `https://drive.google.com/file/d/${i.json.id}/view`,\n    fileId: i.json.id\n  }));\n\nreturn [{\n  json: {\n    results,\n    totalFound: results.length,\n    source: 'drive_api_fallback'\n  }\n}];"
+      }
+    },
+    {
+      "id": "parse-input-8MzxrU",
+      "name": "Parse Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        110,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Parse the query string from ToolWorkflow v2\n// Agent sends tool input as JSON string in $json.query\nconst raw = $input.first().json;\nlet parsed = {};\n\nif (raw.query) {\n  try {\n    parsed = JSON.parse(raw.query);\n  } catch (e) {\n    // If not valid JSON, treat the whole query as a text input\n    parsed = { query: raw.query };\n  }\n} else {\n  parsed = raw;\n}\n\nreturn [{ json: parsed }];"
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Parse Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Pending Entries": {
+      "main": [
+        [
+          {
+            "node": "Search & Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search & Filter": {
+      "main": [
+        [
+          {
+            "node": "Has Results?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Results?": {
+      "main": [
+        [
+          {
+            "node": "Search Drive API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Search Drive API": {
+      "main": [
+        [
+          {
+            "node": "Format Drive Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Input": {
+      "main": [
+        [
+          {
+            "node": "Read Pending Entries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

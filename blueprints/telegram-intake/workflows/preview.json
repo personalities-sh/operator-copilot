@@ -1,0 +1,341 @@
+{
+  "name": "WF-Preview: Classification Preview",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "download",
+      "name": "Download File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.driveFileId }}"
+        },
+        "options": {},
+        "resource": "file"
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_GOOGLE_DRIVE_CREDENTIAL_ID",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "id": "build-request",
+      "name": "Build Haiku Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Build the Anthropic Messages API request for document classification\n// Ported from WF1 Build Claude Request — identical classification prompt\nconst items = $input.all();\nconst results = [];\nconst triggerData = $('Parse Input').first().json;\n\nfor (const item of items) {\n  const binaryKey = Object.keys(item.binary || {})[0];\n  if (!binaryKey) {\n    results.push({ json: { error: 'No binary data found', ...triggerData } });\n    continue;\n  }\n\n  const binaryData = item.binary[binaryKey];\n  const mimeType = binaryData.mimeType || triggerData.mimeType || 'application/pdf';\n  const fileName = triggerData.fileName || binaryData.fileName || 'unknown';\n  const itemIndex = items.indexOf(item);\n  const buffer = await this.helpers.getBinaryDataBuffer(itemIndex, binaryKey);\n  const base64Data = buffer.toString('base64');\n\n  // Build content blocks based on MIME type\n  const contentBlocks = [];\n  const imageTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];\n\n  if (imageTypes.includes(mimeType)) {\n    contentBlocks.push({\n      type: 'image',\n      source: { type: 'base64', media_type: mimeType, data: base64Data }\n    });\n  } else if (mimeType === 'application/pdf') {\n    contentBlocks.push({\n      type: 'document',\n      source: { type: 'base64', media_type: 'application/pdf', data: base64Data }\n    });\n  } else {\n    try {\n      const textContent = Buffer.from(base64Data, 'base64').toString('utf-8');\n      contentBlocks.push({ type: 'text', text: 'Document content:\\n\\n' + textContent });\n    } catch (e) {\n      contentBlocks.push({\n        type: 'document',\n        source: { type: 'base64', media_type: 'application/pdf', data: base64Data }\n      });\n    }\n  }\n\n  // User context from caption/command\n  const userContext = triggerData.userText\n    ? `\\nUser message with file: \"${triggerData.userText}\"`\n    : '';\n\n  const prompt = `You are classifying documents for {{YOUR_COMPANY}}.\n\nCRITICAL CLASSIFICATION RULES:\n\n1. \"Expense\" is the DEFAULT. Classify as Expense if the document involves ANY spending: flights, hotels, travel, visa fees, salaries, bank transfers, subscriptions, invoices, receipts, payments.\n\n2. REVENUE vs EXPENSE — check invoice direction:\n   - Vendor invoices YOUR_COMPANY (YOUR_COMPANY pays) = Expense (EXP-INV)\n   - YOUR_COMPANY invoices a client (YOUR_COMPANY gets paid) = Revenue (REV-INV)\n   - If YOUR_COMPANY is \"Bill To\" = always Expense\n\n3. Board-only classifications are RARE:\n   - \"Entity Document\": ONLY YOUR_COMPANY's own incorporation certs, share certs, MOA, VAT certs, trade licenses, license renewals, YOUR_COMPANY's own regulatory filings\n   - \"Work Contract\": ONLY employment agreements between YOUR_COMPANY and staff\n   - \"Personal/HR\": ONLY passport scans, national ID cards, insurance policies\n   - \"Closed Agreement\": NEVER auto-classify\n   - \"Company Accounting\": ONLY P&L, financial models, accounting spreadsheets\n\n4. \"Company Overview\" and \"Research Reports\" — ONLY for docs AUTHORED BY your company. Third-party pitch decks/whitepapers = BD-REF\n\n5. BD vs Investment: JVs, strategic partnerships = BD. Only pure financial investments (SAFE, SAFT, token purchases) = Investment\n\n6. Vendor agreements: underlying contract = \"Vendor Agreement\". Invoices/receipts from vendor = Expense\n\n7. Regulatory & Licensing: general guidance or filings about OTHER entities only. YOUR_COMPANY's own = Entity Document. Government laws/circulars = REG-REF. Never use regulatory body names as company_name.\n\n8. company_name: shortest recognizable brand name. \"Binance\" not \"Binance Holdings Ltd\"\n\n9. ALWAYS use -DRAFT for agreement status. Never -EXEC.\n\n10. Date priority: (1) date on document, (2) date in filename, (3) file upload date, (4) \"00000000\"\n\n\n11. GHOST ENTRY PREVENTION: Do NOT infer BD relationships from invoices or expense documents. A company appearing on an invoice as a vendor does not make them a BD partner. Vendor invoices = Expense or Vendor Agreement. Only classify as BD if the document is explicitly a partnership agreement, LOE, MOU, NDA, proposal, or similar BD instrument.\n\n12. SERVICE LINES CONTEXT:\n   - Licensing = helping clients obtain VARA/ADGM/other crypto regulatory licenses. Client licensing engagement letters = BD-LIC.\n   - Advisory = regulatory strategy consulting for blockchain/crypto companies. Advisory agreements = BD-ADV.\n   - Innovation Lab = R&D partnerships, proof-of-concept projects, technology pilots.\n   - If a document relates to YOUR_COMPANY providing these services TO a client, it is BD (not Regulatory & Licensing).\n\n13. LEGAL DOCUMENT VERSIONING: Documents with \"YOUR_COMPANY Markup\" in the name contain tracked changes from YOUR_COMPANY review. Documents with \"YOUR_COMPANY Clean\" have accepted changes. Preserve these suffixes when renaming. Increment version numbers from the source document.\n\n14. VENDOR AGREEMENTS vs BD: A contract where YOUR_COMPANY is PAYING for services (office lease, software subscription, staffing, catering) = Vendor Agreement. A contract where YOUR_COMPANY is PROVIDING services or entering a strategic partnership = BD. The test: is YOUR_COMPANY the buyer or the seller/partner?\n\nFile metadata:\n- Original filename: \"${fileName}\"${userContext}\n\nAnalyze this document and return a JSON object:\n\n- \"classification\": one of:\n    Shared: Revenue, Expense, Vendor Agreement, Loan, Investment, Business Development & Partnerships, Legal Template, Company Overview, Marketing & Events, Research Reports, Regulatory & Licensing, Brand Kit\n    Board: Entity Document, Work Contract, Personal/HR, Closed Agreement, Company Accounting\n\n- \"confidence\": \"high\", \"medium\", or \"low\"\n\n- \"filename\": YYYYMMDD_TYPE-SUBTYPE_Counterparty_Amount_Description.ext\n    Types: REV, EXP, LOAN, INV, BD, LEG, OVR, MKT, RES, REG, BRD, ENT, WC, HR, CA, ACC, VA\n    BD subtypes (always -DRAFT): BD-LOE, BD-MOU, BD-NDA, BD-PROP, BD-SVC, BD-JV, BD-SPO, BD-ADV, BD-LIC, BD-DDQ, BD-REF, BD-RSA, BD-NOM\n    Other subtypes: REV-INV/PMT, EXP-INV/PMT, INV-AGR/PMT, OVR-DECK/BP, MKT-BIO/EVT/WEB/RPT, RES-RPT/EXT, REG-APP/LIC/COR/RPT/REF, LOAN-AGR/PMT, VA-LEASE/SVC/SUB\n\n- \"company_name\": counterparty (shortest brand name) or \"\"\n- \"subtype\": subtype code (e.g., \"EXP-INV\", \"BD-NDA-DRAFT\") or \"\"\n- \"amount\": numeric amount or null\n- \"date_extracted\": YYYY-MM-DD or null\n- \"notes\": brief description\n- \"drive\": \"shared\" or \"board\"\n- \"mkt_subfolder\": for Marketing only — \"backgrounder\"/\"events\"/\"website\"/\"press\" or null\n- \"res_subfolder\": for Research only — \"adbc\"/\"external\" or null\n\nReturn ONLY the JSON object, no markdown fences.`;\n\n  contentBlocks.push({ type: 'text', text: prompt });\n\n  const requestBody = {\n    model: 'claude-haiku-4-5-20251001',\n    max_tokens: 2048,\n    messages: [{ role: 'user', content: contentBlocks }]\n  };\n\n  results.push({\n    json: {\n      requestBody: JSON.stringify(requestBody),\n      originalFilename: fileName,\n      driveFileId: triggerData.driveFileId,\n      mimeType,\n      canAccessBoard: triggerData.canAccessBoard\n    }\n  });\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "call-claude",
+      "name": "Classify via Haiku",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_HTTP_HEADER_AUTH_CREDENTIAL_ID",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "id": "parse-classification",
+      "name": "Parse Classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Parse Claude's classification response and map to destination folders\n// Ported from WF1 Parse Classification with added Board access gate + human-readable names\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  try {\n    const text = item.json.content?.[0]?.text || '';\n    let cleaned = text.trim();\n    if (cleaned.startsWith('```')) {\n      cleaned = cleaned.replace(/^```(?:json)?\\s*/, '').replace(/\\s*```$/, '');\n    }\n    const parsed = JSON.parse(cleaned);\n\n    const prevData = $('Build Haiku Request').first().json;\n    const canAccessBoard = prevData.canAccessBoard === true || prevData.canAccessBoard === 'true';\n\n    // --- Folder Mapping (17 classifications) ---\n    const folderMap = {\n      'Revenue': 'YOUR_REVENUE_FOLDER_ID',\n      'Expense': 'YOUR_EXPENSE_FOLDER_ID',\n      'Vendor Agreement': 'YOUR_VENDOR_AGREEMENTS_FOLDER_ID',\n      'Loan': 'YOUR_LOAN_FOLDER_ID',\n      'Investment': 'YOUR_INVESTMENT_FOLDER_ID',\n      'Business Development & Partnerships': 'YOUR_BD_PIPELINE_FOLDER_ID',\n      'Legal Template': 'YOUR_LEGAL_TEMPLATE_FOLDER_ID',\n      'Company Overview': 'YOUR_OVERVIEW_FOLDER_ID',\n      'Marketing & Events': 'YOUR_MARKETING_FOLDER_ID',\n      'Research Reports': 'YOUR_RESEARCH_FOLDER_ID',\n      'Regulatory & Licensing': 'YOUR_REGULATORY_FOLDER_ID',\n      'Brand Kit': 'YOUR_BRAND_FOLDER_ID',\n      'Entity Document': 'YOUR_ENTITY_DOC_FOLDER_ID',\n      'Work Contract': 'YOUR_WORK_CONTRACT_FOLDER_ID',\n      'Personal/HR': 'YOUR_HR_FOLDER_ID',\n      'Closed Agreement': 'YOUR_CLOSED_AGREEMENT_FOLDER_ID',\n      'Company Accounting': 'YOUR_ACCOUNTING_FOLDER_ID'\n    };\n\n    // Human-readable destination names\n    const nameMap = {\n      'Revenue': 'Revenue', 'Expense': 'Expenses',\n      'Vendor Agreement': 'Vendor Agreements', 'Loan': 'Loans',\n      'Investment': 'Investments',\n      'Business Development & Partnerships': 'BD & Partnerships',\n      'Legal Template': 'Legal Templates',\n      'Company Overview': 'YOUR_COMPANY Overview',\n      'Marketing & Events': 'Marketing & Events',\n      'Research Reports': 'Research Reports',\n      'Regulatory & Licensing': 'Regulatory & Licensing',\n      'Brand Kit': 'Brand Kit',\n      'Entity Document': 'Entity Documents',\n      'Work Contract': 'Work Contracts',\n      'Personal/HR': 'Personal & HR',\n      'Closed Agreement': 'Closed Agreements',\n      'Company Accounting': 'Company Accounting'\n    };\n\n    // Marketing subfolder mapping\n    const mktSubfolders = {\n      'backgrounder': 'YOUR_MKT_BIO_FOLDER_ID',\n      'events': 'YOUR_MKT_EVENTS_FOLDER_ID',\n      'website': 'YOUR_MKT_WEBSITE_FOLDER_ID',\n      'press': 'YOUR_MKT_PRESS_FOLDER_ID'\n    };\n    const mktNames = {\n      'backgrounder': 'Marketing / Backgrounder',\n      'events': 'Marketing / Events',\n      'website': 'Marketing / Website',\n      'press': 'Marketing / Press'\n    };\n\n    // Research subfolder mapping\n    const resSubfolders = {\n      'adbc': 'YOUR_RES_COMPANY_FOLDER_ID',\n      'external': 'YOUR_RES_EXTERNAL_FOLDER_ID'\n    };\n    const resNames = {\n      'adbc': 'Research / YOUR_COMPANY', 'external': 'Research / External'\n    };\n\n    // --- Determine destination ---\n    let destinationFolder = folderMap[parsed.classification] || 'YOUR_INBOX_FOLDER_ID';\n    let destinationName = nameMap[parsed.classification] || parsed.classification;\n    let drive = parsed.drive || 'shared';\n\n    // Marketing subfolder override\n    if (parsed.classification === 'Marketing & Events' && parsed.mkt_subfolder) {\n      destinationFolder = mktSubfolders[parsed.mkt_subfolder] || destinationFolder;\n      destinationName = mktNames[parsed.mkt_subfolder] || destinationName;\n    }\n\n    // Research subfolder override\n    if (parsed.classification === 'Research Reports' && parsed.res_subfolder) {\n      destinationFolder = resSubfolders[parsed.res_subfolder] || destinationFolder;\n      destinationName = resNames[parsed.res_subfolder] || destinationName;\n    }\n\n    // Year subfolder routing for Revenue and Expense\n    const yearSubfolderMap = {\n      'YOUR_REVENUE_FOLDER_ID': {\n        '2025': 'YOUR_REVENUE_2025_FOLDER_ID',\n        '2026': 'YOUR_REVENUE_2026_FOLDER_ID'\n      },\n      'YOUR_EXPENSE_FOLDER_ID': {\n        '2024': 'YOUR_EXPENSE_2024_FOLDER_ID',\n        '2025': 'YOUR_EXPENSE_2025_FOLDER_ID',\n        '2026': 'YOUR_EXPENSE_2026_FOLDER_ID'\n      }\n    };\n    const docYear = parsed.date_extracted\n      ? parsed.date_extracted.substring(0, 4)\n      : new Date().getFullYear().toString();\n    const yearFolders = yearSubfolderMap[destinationFolder];\n    if (yearFolders && yearFolders[docYear]) {\n      destinationFolder = yearFolders[docYear];\n      destinationName += ` / ${docYear}`;\n    }\n\n    // --- Board Access Gate ---\n    // If user cannot access Board Drive, override Board destinations to Inbox\n    const BOARD_CLASSIFICATIONS = [\n      'Entity Document', 'Work Contract', 'Personal/HR',\n      'Closed Agreement', 'Company Accounting'\n    ];\n    let boardOverridden = false;\n    if (!canAccessBoard && (drive === 'board' || BOARD_CLASSIFICATIONS.includes(parsed.classification))) {\n      destinationFolder = 'YOUR_INBOX_FOLDER_ID';\n      destinationName = 'Inbox (Board access required)';\n      drive = 'shared';\n      boardOverridden = true;\n    }\n\n    // BD defaults to Pipeline subfolder — will be overridden by Partnership lookup\n    const isBD = parsed.classification === 'Business Development & Partnerships';\n\n    results.push({\n      json: {\n        classification: parsed.classification,\n        proposedFilename: parsed.filename,\n        confidence: parsed.confidence,\n        company_name: parsed.company_name,\n        subtype: parsed.subtype,\n        amount: parsed.amount,\n        date_extracted: parsed.date_extracted,\n        notes: parsed.notes,\n        drive,\n        destinationFolder,\n        destinationName,\n        driveFileId: prevData.driveFileId,\n        originalFilename: prevData.originalFilename,\n        isBD,\n        boardOverridden,\n        mkt_subfolder: parsed.mkt_subfolder || null,\n        res_subfolder: parsed.res_subfolder || null\n      }\n    });\n  } catch (e) {\n    const prevData = $('Build Haiku Request').first().json;\n    results.push({\n      json: {\n        classification: 'ERROR',\n        confidence: 'low',\n        proposedFilename: prevData.originalFilename,\n        originalFilename: prevData.originalFilename,\n        driveFileId: prevData.driveFileId,\n        destinationFolder: 'YOUR_INBOX_FOLDER_ID',\n        destinationName: 'Inbox (classification failed)',\n        drive: 'shared',\n        isBD: false,\n        boardOverridden: false,\n        notes: 'Classification failed: ' + e.message,\n        error: true\n      }\n    });\n  }\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "check-bd",
+      "name": "Is BD?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "bd-check",
+              "leftValue": "={{ $json.isBD }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "lookup-pipeline",
+      "name": "Lookup Partnership Pipeline",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1320,
+        -120
+      ],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_PARTNERSHIP_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Sheet1"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Company",
+              "lookupValue": "={{ $json.company_name }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "set-bd-folder",
+      "name": "Set BD Subfolder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "// Determine BD subfolder based on Partnership Pipeline status\nconst items = $input.all();\nconst classData = $('Parse Classification').first().json;\n\nconst bdFolders = {\n  'Active': 'YOUR_BD_ACTIVE_FOLDER_ID',\n  'Pipeline': 'YOUR_BD_PIPELINE_FOLDER_ID',\n  'Concluded': 'YOUR_BD_CONCLUDED_FOLDER_ID',\n  'Archived': 'YOUR_BD_ARCHIVED_FOLDER_ID'\n};\nconst bdNames = {\n  'Active': 'BD & Partnerships / Active',\n  'Pipeline': 'BD & Partnerships / Pipeline',\n  'Concluded': 'BD & Partnerships / Concluded',\n  'Archived': 'BD & Partnerships / Archived'\n};\n\n// Check if company was found in the pipeline\nlet status = 'Pipeline'; // Default for unknown companies\nif (items.length > 0 && items[0].json.Status) {\n  status = items[0].json.Status;\n}\n\nreturn [{\n  json: {\n    ...classData,\n    destinationFolder: bdFolders[status] || bdFolders['Pipeline'],\n    destinationName: bdNames[status] || 'BD & Partnerships / Pipeline',\n    bdStatus: status\n  }\n}];"
+      }
+    },
+    {
+      "id": "return-preview",
+      "name": "Return Preview",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Final output: return the classification preview\n// This node receives from both BD path (Set BD Subfolder) and non-BD path (Is BD? false)\nconst item = $input.first().json;\n\n// If coming from BD path, data already has updated folder info\n// If coming from non-BD path, data comes directly from Parse Classification\nreturn [{ json: item }];"
+      }
+    },
+    {
+      "id": "parse-input",
+      "name": "Parse Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        110,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Parse the query string from ToolWorkflow v2\n// The agent sends tool input as a JSON string in $json.query\n// BUT the agent is non-deterministic — sometimes sends proper JSON,\n// sometimes sends just a file ID, sometimes sends a plain string.\nconst raw = $input.first().json;\nlet parsed = {};\n\nif (raw.query) {\n  try {\n    parsed = JSON.parse(raw.query);\n  } catch (e) {\n    // Not valid JSON — check if it looks like a Google Drive file ID\n    const trimmed = raw.query.trim();\n    if (/^[a-zA-Z0-9_-]{10,}$/.test(trimmed)) {\n      // Bare file ID — wrap it\n      parsed = { file_id: trimmed };\n    } else {\n      parsed = { error: 'Failed to parse query: ' + raw.query };\n    }\n  }\n} else {\n  // If data comes directly (not wrapped in query), pass through\n  parsed = raw;\n}\n\n// Normalize field names - agent may use different names\nconst driveFileId = parsed.file_id || parsed.driveFileId || parsed.fileId || '';\nconst fileName = parsed.filename || parsed.fileName || parsed.file_name || 'unknown';\nconst mimeType = parsed.mime_type || parsed.mimeType || 'application/pdf';\nconst canAccessBoard = parsed.canAccessBoard || false;\n\nreturn [{\n  json: {\n    driveFileId,\n    fileName,\n    mimeType,\n    canAccessBoard,\n    rawQuery: raw.query || ''\n  }\n}];"
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Parse Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download File": {
+      "main": [
+        [
+          {
+            "node": "Build Haiku Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Haiku Request": {
+      "main": [
+        [
+          {
+            "node": "Classify via Haiku",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify via Haiku": {
+      "main": [
+        [
+          {
+            "node": "Parse Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Classification": {
+      "main": [
+        [
+          {
+            "node": "Is BD?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is BD?": {
+      "main": [
+        [
+          {
+            "node": "Lookup Partnership Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Partnership Pipeline": {
+      "main": [
+        [
+          {
+            "node": "Set BD Subfolder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set BD Subfolder": {
+      "main": [
+        [
+          {
+            "node": "Return Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Input": {
+      "main": [
+        [
+          {
+            "node": "Download File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

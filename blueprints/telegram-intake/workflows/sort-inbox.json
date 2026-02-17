@@ -1,0 +1,231 @@
+{
+  "name": "WF-SortInbox: Batch Sort Preview",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "list-inbox",
+      "name": "List Inbox Files",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "operation": "search",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_INBOX_FOLDER_ID"
+        },
+        "returnAll": true,
+        "options": {},
+        "driveId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SHARED_DRIVE_ID"
+        },
+        "resource": "fileFolder"
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_GOOGLE_DRIVE_CREDENTIAL_ID",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "id": "check-empty",
+      "name": "Inbox Empty?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "empty-check",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "empty-result",
+      "name": "Return Empty",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        120
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { count: 0, previews: [], summary: 'Inbox is empty.' } }];"
+      }
+    },
+    {
+      "id": "filter-files",
+      "name": "Filter to Files Only",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "// Filter out folders, keep only actual files\nconst items = $input.all();\nconst canAccessBoard = $('Parse Input').first().json.canAccessBoard;\nconst files = items.filter(i => \n  i.json.mimeType !== 'application/vnd.google-apps.folder' && i.json.id\n);\n\n// Pass each file with the access control flag\nreturn files.map(f => ({\n  json: {\n    driveFileId: f.json.id,\n    fileName: f.json.name,\n    mimeType: f.json.mimeType,\n    userText: '',\n    canAccessBoard: canAccessBoard\n  }\n}));"
+      }
+    },
+    {
+      "id": "batch-classify",
+      "name": "Classify Each File",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        -120
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": "iwZubQEOc6yPKgUv"
+      }
+    },
+    {
+      "id": "accumulate",
+      "name": "Accumulate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "// Accumulate all classification previews into a single summary\nconst items = $input.all();\nconst previews = items.map(i => ({\n  driveFileId: i.json.driveFileId,\n  originalName: i.json.originalFilename || i.json.fileName,\n  proposedFilename: i.json.proposedFilename,\n  classification: i.json.classification,\n  confidence: i.json.confidence,\n  company: i.json.company_name,\n  destinationName: i.json.destinationName,\n  drive: i.json.drive,\n  destinationFolder: i.json.destinationFolder,\n  amount: i.json.amount,\n  date_extracted: i.json.date_extracted,\n  subtype: i.json.subtype,\n  notes: i.json.notes\n}));\n\n// Build summary breakdown\nconst breakdown = {};\nfor (const p of previews) {\n  const key = p.classification || 'Unknown';\n  breakdown[key] = (breakdown[key] || 0) + 1;\n}\nconst summaryParts = Object.entries(breakdown).map(([k, v]) => `${v} ${k}`);\n\nreturn [{\n  json: {\n    count: previews.length,\n    previews,\n    summary: `${previews.length} files: ${summaryParts.join(', ')}`,\n    breakdown\n  }\n}];"
+      }
+    },
+    {
+      "id": "parse-input-oKd40W",
+      "name": "Parse Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        110,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Parse the query string from ToolWorkflow v2\n// Agent sends tool input as JSON string in $json.query\nconst raw = $input.first().json;\nlet parsed = {};\n\nif (raw.query) {\n  try {\n    parsed = JSON.parse(raw.query);\n  } catch (e) {\n    // If not valid JSON, treat the whole query as a text input\n    parsed = { query: raw.query };\n  }\n} else {\n  parsed = raw;\n}\n\nreturn [{ json: parsed }];"
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Parse Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Inbox Files": {
+      "main": [
+        [
+          {
+            "node": "Inbox Empty?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inbox Empty?": {
+      "main": [
+        [
+          {
+            "node": "Return Empty",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Filter to Files Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter to Files Only": {
+      "main": [
+        [
+          {
+            "node": "Classify Each File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Each File": {
+      "main": [
+        [
+          {
+            "node": "Accumulate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Input": {
+      "main": [
+        [
+          {
+            "node": "List Inbox Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

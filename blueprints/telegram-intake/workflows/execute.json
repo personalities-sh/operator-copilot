@@ -1,0 +1,427 @@
+{
+  "name": "WF-Execute: Classification Execution",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "rename-file",
+      "name": "Rename File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "operation": "update",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.driveFileId }}"
+        },
+        "newUpdatedFileName": "={{ $json.proposedFilename }}",
+        "options": {},
+        "resource": "file"
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_GOOGLE_DRIVE_CREDENTIAL_ID",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "id": "prepare-move",
+      "name": "Prepare Move Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Reassemble classification data after Rename node overwrites $json\n// The Rename node outputs Google Drive API response (id, name, mimeType)\n// We need the original classification fields back for the Move and Sheet nodes\nconst renameOutput = $input.first().json;\nconst triggerData = $('Parse Input').first().json;\n\nreturn [{\n  json: {\n    ...triggerData,\n    fileId: renameOutput.id // Use confirmed file ID from Drive API response\n  }\n}];"
+      }
+    },
+    {
+      "id": "move-file",
+      "name": "Move to Destination",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "operation": "move",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.fileId }}"
+        },
+        "driveId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.drive === 'board' ? 'YOUR_BOARD_DRIVE_ID' : 'YOUR_SHARED_DRIVE_ID' }}"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.destinationFolder }}"
+        },
+        "options": {},
+        "resource": "file"
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_GOOGLE_DRIVE_CREDENTIAL_ID",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "id": "prepare-sheet",
+      "name": "Prepare Sheet Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Reassemble data after Move node overwrites $json\nconst moveOutput = $input.first().json;\nconst data = $('Prepare Move Data').first().json;\n\nreturn [{\n  json: {\n    ...data,\n    fileId: moveOutput.id || data.fileId\n  }\n}];"
+      }
+    },
+    {
+      "id": "log-to-sheet",
+      "name": "Log to Pending Entries",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_TRACKING_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pending Entries"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status (Pending/Posted/Rejected)": "Pending",
+            "Source (inbox/telegram)": "={{ $json.source || 'telegram' }}",
+            "Timestamp": "={{ new Date().toISOString() }}",
+            "Classification": "={{ $json.classification }}",
+            "Original Filename": "={{ $json.originalFilename }}",
+            "New Filename": "={{ $json.proposedFilename }}",
+            "Company Name": "={{ $json.company_name }}",
+            "Subtype": "={{ $json.subtype }}",
+            "Amount": "={{ $json.amount }}",
+            "Date Extracted": "={{ $json.date_extracted }}",
+            "Destination Folder": "={{ $json.destinationFolder }}",
+            "File ID": "={{ $json.fileId }}",
+            "Drive Link": "=https://drive.google.com/file/d/{{ $json.fileId }}/view",
+            "Confidence": "={{ $json.confidence }}",
+            "Notes": "={{ $json.notes }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Status (Pending/Posted/Rejected)",
+              "displayName": "Status (Pending/Posted/Rejected)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Source (inbox/telegram)",
+              "displayName": "Source (inbox/telegram)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Classification",
+              "displayName": "Classification",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Original Filename",
+              "displayName": "Original Filename",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "New Filename",
+              "displayName": "New Filename",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Company Name",
+              "displayName": "Company Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Extracted JSON",
+              "displayName": "Extracted JSON",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Amount",
+              "displayName": "Amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Date Extracted",
+              "displayName": "Date Extracted",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Destination Folder",
+              "displayName": "Destination Folder",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "File ID",
+              "displayName": "File ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Drive Link",
+              "displayName": "Drive Link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Confidence",
+              "displayName": "Confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Subtype",
+              "displayName": "Subtype",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Posted Date",
+              "displayName": "Posted Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Notes",
+              "displayName": "Notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "return-result",
+      "name": "Return Confirmation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Build confirmation response after successful rename + move + log\nconst data = $('Prepare Sheet Data').first().json;\n\nreturn [{\n  json: {\n    success: true,\n    filename: data.proposedFilename,\n    classification: data.classification,\n    company: data.company_name,\n    confidence: data.confidence,\n    driveLink: `https://drive.google.com/file/d/${data.fileId}/view`,\n    fileId: data.fileId,\n    destination: data.destinationName || data.classification\n  }\n}];"
+      }
+    },
+    {
+      "id": "parse-input-xEON7j",
+      "name": "Parse Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        110,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Parse the query string from ToolWorkflow v2\n// Agent sends tool input as JSON string in $json.query\n// IMPORTANT: Agent is non-deterministic — field names and values vary.\n// Must normalize field names and reverse-map human-readable values.\nconst raw = $input.first().json;\nlet parsed = {};\n\nif (raw.query) {\n  try {\n    parsed = JSON.parse(raw.query);\n  } catch (e) {\n    parsed = { query: raw.query };\n  }\n} else {\n  parsed = raw;\n}\n\n// --- Normalize field names ---\nconst driveFileId = parsed.driveFileId || parsed.fileId || parsed.file_id || '';\nconst proposedFilename = parsed.proposedFilename || parsed.filename || parsed.newFilename || parsed.new_filename || '';\nconst originalFilename = parsed.originalFilename || parsed.original_filename || parsed.fileName || '';\nconst company_name = parsed.company_name || parsed.company || parsed.companyName || '';\nconst confidence = (parsed.confidence || 'medium').toLowerCase();\nconst subtype = parsed.subtype || '';\nconst amount = parsed.amount || (parsed.sheetEntry && parsed.sheetEntry.amount) || null;\nlet date_extracted = parsed.date_extracted || parsed.dateExtracted || parsed.date || (parsed.sheetEntry && parsed.sheetEntry.date) || null;\nconst notes = parsed.notes || '';\n\n// --- Extract date from filename if missing ---\n// Filename format: YYYYMMDD_TYPE-SUBTYPE_...\nif (!date_extracted && proposedFilename) {\n  const dateMatch = proposedFilename.match(/^(\\d{4})(\\d{2})(\\d{2})_/);\n  if (dateMatch) {\n    date_extracted = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;\n  }\n}\n\n// --- Normalize classification ---\n// Agent sometimes sends 'Expense (Invoice)' instead of 'Expense'\nlet classification = parsed.classification || '';\nconst classificationMap = {\n  'expense': 'Expense',\n  'expense (invoice)': 'Expense',\n  'expense (payment)': 'Expense',\n  'revenue': 'Revenue',\n  'revenue (invoice)': 'Revenue',\n  'revenue (payment)': 'Revenue',\n  'vendor agreement': 'Vendor Agreement',\n  'loan': 'Loan',\n  'investment': 'Investment',\n  'business development & partnerships': 'Business Development & Partnerships',\n  'bd & partnerships': 'Business Development & Partnerships',\n  'bd': 'Business Development & Partnerships',\n  'legal template': 'Legal Template',\n  'adbc overview materials': 'Company Overview',\n  'adbc overview': 'Company Overview',\n  'marketing & events': 'Marketing & Events',\n  'marketing': 'Marketing & Events',\n  'research reports': 'Research Reports',\n  'research': 'Research Reports',\n  'regulatory & licensing': 'Regulatory & Licensing',\n  'regulatory': 'Regulatory & Licensing',\n  'brand kit': 'Brand Kit',\n  'entity document': 'Entity Document',\n  'work contract': 'Work Contract',\n  'personal/hr': 'Personal/HR',\n  'closed agreement': 'Closed Agreement',\n  'company accounting': 'Company Accounting'\n};\nclassification = classificationMap[classification.toLowerCase()] || classification;\n\n// --- Reverse-map destination folder ---\n// Agent may send human-readable path or actual folder ID\nlet destinationFolder = parsed.destinationFolder || '';\nlet destinationName = parsed.destinationName || '';\nlet drive = parsed.drive || parsed.driveType || 'shared';\n\n// Normalize drive field\nif (typeof drive === 'string') {\n  drive = drive.toLowerCase().includes('board') ? 'board' : 'shared';\n}\n\n// If destinationFolder is not a Drive ID (doesn't look like one), reverse-map it\nconst looksLikeDriveId = /^[a-zA-Z0-9_-]{15,}$/.test(destinationFolder);\nif (!looksLikeDriveId) {\n  // Folder mapping by classification\n  const folderMap = {\n    'Revenue': 'YOUR_REVENUE_FOLDER_ID',\n    'Expense': 'YOUR_EXPENSE_FOLDER_ID'\n  };\n\n  destinationFolder = folderMap[classification] || 'YOUR_INBOX_FOLDER_ID';\n  destinationName = classification;\n}\n\n// --- Year subfolder routing (always apply for Revenue/Expense) ---\nconst yearSubfolderMap = {\n  'YOUR_REVENUE_FOLDER_ID': {\n    // Add year: folder_id mappings for revenue subfolders\n  },\n  'YOUR_EXPENSE_FOLDER_ID': {\n    // Add year: folder_id mappings for expense subfolders\n  }\n};\nconst docYear = date_extracted ? date_extracted.substring(0, 4) : new Date().getFullYear().toString();\nconst yearFolders = yearSubfolderMap[destinationFolder];\nif (yearFolders && yearFolders[docYear]) {\n  destinationFolder = yearFolders[docYear];\n  destinationName = (destinationName || classification) + ' / ' + docYear;\n}\n\nreturn [{\n  json: {\n    driveFileId,\n    proposedFilename,\n    originalFilename,\n    classification,\n    company_name,\n    confidence,\n    subtype,\n    amount,\n    date_extracted,\n    notes,\n    destinationFolder,\n    destinationName,\n    drive,\n    source: 'telegram'\n  }\n}];"
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Parse Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rename File": {
+      "main": [
+        [
+          {
+            "node": "Prepare Move Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Move Data": {
+      "main": [
+        [
+          {
+            "node": "Move to Destination",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Move to Destination": {
+      "main": [
+        [
+          {
+            "node": "Prepare Sheet Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Sheet Data": {
+      "main": [
+        [
+          {
+            "node": "Log to Pending Entries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to Pending Entries": {
+      "main": [
+        [
+          {
+            "node": "Return Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Input": {
+      "main": [
+        [
+          {
+            "node": "Rename File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

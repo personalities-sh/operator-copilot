@@ -1,0 +1,96 @@
+{
+  "name": "WF-InboxStatus: Inbox File Count",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "list-inbox",
+      "name": "List Inbox Files",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "operation": "search",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_INBOX_FOLDER_ID"
+        },
+        "returnAll": true,
+        "options": {},
+        "driveId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SHARED_DRIVE_ID"
+        },
+        "resource": "fileFolder"
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_GOOGLE_DRIVE_CREDENTIAL_ID",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "id": "count-files",
+      "name": "Count Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Count files in Inbox (exclude folders)\nconst items = $input.all();\nconst files = items.filter(i => i.json.mimeType !== 'application/vnd.google-apps.folder' && i.json.id);\nconst count = files.length;\nconst preview = files.slice(0, 10).map(f => f.json.name);\n\nreturn [{\n  json: {\n    count,\n    message: count === 0 ? 'Inbox is empty.' : `${count} file(s) in the Inbox.`,\n    preview\n  }\n}];"
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "List Inbox Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Inbox Files": {
+      "main": [
+        [
+          {
+            "node": "Count Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

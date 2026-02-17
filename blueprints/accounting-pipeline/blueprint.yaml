@@ -1,0 +1,38 @@
+name: accounting-pipeline
+display_name: Accounting Pipeline
+version: 1.0.0
+description: >
+  Custom accounting spreadsheet that categorizes expenses and revenue,
+  linked to Google Drive folders for source documents. AI classifies
+  transactions from uploaded receipts and invoices.
+
+complexity: medium
+setup_time_minutes: 30
+
+outcomes:
+  - Expenses and revenue automatically categorized from uploaded documents
+  - Custom spreadsheet with formulas for running totals and category breakdowns
+  - Source documents linked to their corresponding spreadsheet entries
+
+requires:
+  services:
+    - name: google-sheets
+      purpose: "Accounting ledger — categorized expenses and revenue"
+      required: true
+    - name: google-drive
+      purpose: "Source document storage — receipts, invoices, contracts"
+      required: true
+    - name: anthropic-api
+      purpose: "AI classification — extracts amounts, dates, vendors from documents"
+      required: true
+
+variables:
+  - key: ACCOUNTING_SHEET_ID
+    prompt: "Google Sheet ID for the accounting spreadsheet"
+    required: true
+  - key: EXPENSE_FOLDER_ID
+    prompt: "Google Drive folder ID for expense documents"
+    required: true
+  - key: REVENUE_FOLDER_ID
+    prompt: "Google Drive folder ID for revenue documents"
+    required: true

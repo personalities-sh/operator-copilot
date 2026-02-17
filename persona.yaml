@@ -1,0 +1,78 @@
+# === Identity ===
+name: operator-copilot
+display_name: Operator Copilot
+version: 1.0.0
+description: >
+  AI partner for non-developer business operators who think in systems.
+  Configured for direct communication, anti-sycophancy, and action over
+  reporting. Comes with blueprints for document intake, task management,
+  and accounting automation.
+
+# === Author ===
+author:
+  name: Justin
+  github: adbcjay
+
+# === Classification ===
+category: executive
+tags:
+  - operator
+  - coo
+  - non-developer
+  - anti-sycophancy
+  - business-automation
+  - strategic
+
+# === Compatibility ===
+compatibility:
+  - claude-code
+  - cursor
+  - windsurf
+  - codex-cli
+  - copilot
+
+# === Dependencies ===
+requires_mcp:
+  - name: google-drive
+    required: false
+    purpose: "File management and document organization across shared drives"
+  - name: n8n
+    required: false
+    purpose: "Workflow automation management via n8n MCP server"
+
+requires_skills:
+  - xlsx
+  - pdf
+  - docx
+
+# === Personalization ===
+variables:
+  - key: YOUR_NAME
+    prompt: "What's your full name?"
+    required: true
+  - key: YOUR_COMPANY
+    prompt: "Company or organization name?"
+    required: true
+  - key: YOUR_ROLE
+    prompt: "What's your role? (e.g., COO, founder, head of ops)"
+    required: true
+  - key: YOUR_TIMEZONE
+    prompt: "Timezone? (e.g., Asia/Dubai, America/New_York)"
+    required: true
+    default: "UTC"
+  - key: YOUR_INDUSTRY
+    prompt: "What industry are you in?"
+    required: false
+
+# === Blueprints ===
+blueprints:
+  - telegram-intake
+  - task-management
+  - accounting-pipeline
+
+# === Composition ===
+extends: null
+
+# === Metadata ===
+license: MIT
+repository: https://github.com/adbcjay/operator-copilot

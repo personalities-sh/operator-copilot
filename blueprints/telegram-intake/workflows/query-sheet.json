@@ -1,0 +1,118 @@
+{
+  "name": "WF-QuerySheet: Pending Entries Query",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "read-sheet",
+      "name": "Read Pending Entries",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_TRACKING_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Pending Entries"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "filter-summarize",
+      "name": "Filter & Summarize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Filter and summarize Pending Entries based on input parameters\nconst items = $input.all();\nconst trigger = $('Parse Input').first().json;\nconst filter = (trigger.filter || 'pending').toLowerCase();\nconst canAccessBoard = trigger.canAccessBoard === true || trigger.canAccessBoard === 'true';\n\n// Board-only classifications — hide from non-admin users\nconst BOARD_CLASSIFICATIONS = [\n  'Entity Document', 'Work Contract', 'Personal/HR',\n  'Closed Agreement', 'Company Accounting'\n];\n\n// Get all rows as plain objects\nlet rows = items.map(i => i.json).filter(row => row['Classification']);\n\n// Board access gate: remove Board entries for non-admin users\nif (!canAccessBoard) {\n  rows = rows.filter(r => !BOARD_CLASSIFICATIONS.includes(r['Classification']));\n}\n\n// Apply filter\nif (filter === 'pending') {\n  rows = rows.filter(r => {\n    const status = (r['Status (Pending/Posted/Rejected)'] || '').toLowerCase();\n    return status === 'pending' || status === '';\n  });\n} else if (filter === 'recent') {\n  // Last 20 entries regardless of status\n  rows = rows.slice(-20);\n}\n// filter === 'all' — no additional filtering\n\n// Build breakdown by classification\nconst breakdown = {};\nfor (const row of rows) {\n  const cls = row['Classification'] || 'Unknown';\n  breakdown[cls] = (breakdown[cls] || 0) + 1;\n}\n\n// Format recent entries (last 10)\nconst recentEntries = rows.slice(-10).map(r => ({\n  status: r['Status (Pending/Posted/Rejected)'] || 'Pending',\n  classification: r['Classification'],\n  filename: r['New Filename'] || r['Original Filename'],\n  company: r['Company Name'],\n  amount: r['Amount'],\n  date: r['Date Extracted'],\n  confidence: r['Confidence'],\n  driveLink: r['Drive Link']\n}));\n\nreturn [{\n  json: {\n    filter,\n    totalFound: rows.length,\n    breakdown,\n    recentEntries\n  }\n}];"
+      }
+    },
+    {
+      "id": "parse-input-VZ0d0H",
+      "name": "Parse Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        110,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Parse the query string from ToolWorkflow v2\n// Agent sends tool input as JSON string in $json.query\nconst raw = $input.first().json;\nlet parsed = {};\n\nif (raw.query) {\n  try {\n    parsed = JSON.parse(raw.query);\n  } catch (e) {\n    // If not valid JSON, treat the whole query as a text input\n    parsed = { query: raw.query };\n  }\n} else {\n  parsed = raw;\n}\n\nreturn [{ json: parsed }];"
+      }
+    }
+  ],
+  "connections": {
+    "Workflow Input": {
+      "main": [
+        [
+          {
+            "node": "Parse Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Pending Entries": {
+      "main": [
+        [
+          {
+            "node": "Filter & Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Input": {
+      "main": [
+        [
+          {
+            "node": "Read Pending Entries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
